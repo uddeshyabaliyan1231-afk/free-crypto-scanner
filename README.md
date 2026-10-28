@@ -1,0 +1,1 @@
+# free-crypto-scanner
