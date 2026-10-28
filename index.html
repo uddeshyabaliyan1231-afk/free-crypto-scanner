@@ -1,0 +1,93 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Free Crypto Short Scanner</title>
+<style>
+body{background:#0b1020;color:#eef2ff;font:16px Arial;padding:16px}
+h2{color:#ff6377}button{background:#ff6377;color:white;padding:14px;border:0;border-radius:8px;width:100%;font-weight:bold}
+.card{background:#151e30;padding:14px;margin:12px 0;border-radius:10px;overflow-wrap:anywhere}
+small{color:#aab6cc}table{width:100%;text-align:left}td,th{padding:8px;border-bottom:1px solid #344057}
+</style>
+</head>
+<body>
+<h2>FREE CRYPTO SHORT SCANNER</h2>
+<p>Binance USDT perpetual futures · Live public data</p>
+<button onclick="scan()">SCAN NOW</button>
+<div class="card" id="status">Ready to scan</div>
+<div class="card"><b>Short candidates</b>
+<div style="overflow-x:auto"><table>
+<thead><tr><th>Coin</th><th>Price</th><th>1h drop</th><th>Vol ×</th><th>OI</th><th>Funding</th></tr></thead>
+<tbody id="out"><tr><td colspan="6">Press Scan Now</td></tr></tbody>
+</table></div></div>
+<div class="card"><b>Important</b><p>Whale selling and negative news are not confirmed by this version. They require separate data sources. This scanner will not claim all 7 checks passed without that data.</p></div>
+<script>
+const base='https://fapi.binance.com';
+async function get(path){
+ const r=await fetch(base+path);
+ if(!r.ok)throw Error('API error '+r.status);
+ return r.json();
+}
+async function scan(){
+ const status=document.getElementById('status');
+ const out=document.getElementById('out');
+ status.textContent='Loading Binance markets...';
+ out.innerHTML='';
+ try{
+  const [info,tickers,fund]=await Promise.all([
+   get('/fapi/v1/exchangeInfo'),
+   get('/fapi/v1/ticker/24hr'),
+   get('/fapi/v1/premiumIndex')
+  ]);
+  const tm=Object.fromEntries(tickers.map(x=>[x.symbol,x]));
+  const fm=Object.fromEntries(fund.map(x=>[x.symbol,x]));
+  const symbols=info.symbols.filter(s=>
+   s.status==='TRADING'&&s.contractType==='PERPETUAL'&&
+   s.quoteAsset==='USDT'
+  ).sort((a,b)=>
+   Number(tm[b.symbol]?.quoteVolume||0)-
+   Number(tm[a.symbol]?.quoteVolume||0)
+  ).slice(0,100);
+  let found=[],done=0;
+  status.textContent='Checking '+symbols.length+' markets...';
+  for(const s of symbols){
+   try{
+    const [k,oi,oh]=await Promise.all([
+     get('/fapi/v1/klines?symbol='+s.symbol+'&interval=1h&limit=30'),
+     get('/fapi/v1/openInterest?symbol='+s.symbol),
+     get('/futures/data/openInterestHist?symbol='+s.symbol+'&period=5m&limit=2').catch(()=>[])
+    ]);
+    const bars=k.slice(0,-1);
+    if(bars.length<22)continue;
+    const last=bars.at(-1),prev=bars.at(-2);
+    const drop=(Number(last[4])/Number(prev[4])-1)*100;
+    const vols=bars.slice(-21,-1).map(x=>Number(x[7]));
+    const avg=vols.reduce((a,b)=>a+b,0)/vols.length;
+    const ratio=avg?Number(last[7])/avg:0;
+    const oiChange=oh.length>=2?
+     (Number(oh.at(-1).sumOpenInterest)/Number(oh[0].sumOpenInterest)-1)*100:NaN;
+    const funding=Number(fm[s.symbol]?.lastFundingRate);
+    const prevSupport=Math.min(...bars.slice(-25,-1).map(x=>Number(x[3])));
+    const breakdown=Number(last[4])<prevSupport;
+    if(drop<=-5&&ratio>=2&&oiChange>0&&funding>0&&breakdown){
+     found.push({symbol:s.symbol,price:Number(last[4]),drop,ratio,oiChange,funding});
+    }
+   }catch(e){}
+   done++;
+   status.textContent='Checked '+done+'/'+symbols.length+
+    ' markets · candidates '+found.length;
+  }
+  out.innerHTML=found.length?found.map(x=>
+   '<tr><td>'+x.symbol+'</td><td>'+x.price+'</td><td>'+
+   x.drop.toFixed(2)+'%</td><td>'+x.ratio.toFixed(2)+'×</td><td>'+
+   x.oiChange.toFixed(2)+'%</td><td>'+
+   (x.funding*100).toFixed(4)+'%</td></tr>'
+  ).join(''):'<tr><td colspan="6">No candidates passed the Binance checks.</td></tr>';
+  status.textContent='Finished: '+done+' markets checked. '+found.length+
+   ' passed Binance checks. Whale/news checks remain unverified.';
+ }catch(e){status.textContent='Error: '+e.message+' — check internet and retry.'}
+}
+</script>
+</body>
+</html>
